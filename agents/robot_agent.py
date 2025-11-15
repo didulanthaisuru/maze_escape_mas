@@ -23,7 +23,19 @@ class RobotAgent:
         self.local_map = {}  # Local knowledge of maze
         self.current_target = None
         self.reached_exit = False
+        self.is_dead = False  # True when agent enters a dead end (permanent death)
         self.stuck_counter = 0
+        self.backtrack_positions = set()  # Positions we've backtracked from (WRONG_PATH)
+        self.last_position = None  # Track previous position to prevent immediate backtracking
+        
+        # Communication
+        self.known_dead_ends = set()  # Dead ends learned from messages (TRUE dead ends - can't go back)
+        self.known_wrong_paths = set()  # Wrong paths learned from messages (can backtrack)
+        self.known_traps = set()  # Trap locations learned from messages
+        self.exit_location = None  # Exit location if discovered
+        self.exit_path = None  # Path to exit shared by discovering agent
+        self.should_evacuate = False  # True when exit is found by any agent
+        self.received_messages = []  # Store received messages
         
     def get_position(self):
         """Get current position as tuple"""
@@ -34,9 +46,9 @@ class RobotAgent:
         return abs(self.x - target[0]) + abs(self.y - target[1])
     
     def can_communicate_with(self, other_agent):
-        """Check if agent can communicate with another agent"""
-        distance = self.manhattan_distance(other_agent.get_position())
-        return distance <= self.communication_range
+        """Check if agent can communicate with another agent - unlimited range"""
+        # All agents can communicate with each other regardless of distance
+        return True
     
     def perceive_environment(self, maze):
         """
@@ -60,72 +72,432 @@ class RobotAgent:
         
         return visible_cells
     
-    def decide_next_move(self, maze, blackboard):
+    def process_messages(self, communication_protocol):
+        """
+        Process incoming messages from other agents
+        """
+        messages = communication_protocol.receive_messages(self.id)
+        
+        for msg in messages:
+            self.received_messages.append(msg)
+            
+            if msg.message_type == 'DEAD_END':
+                # Another agent found a TRUE dead end (can't go back)
+                dead_end_pos = msg.content.get('position')
+                if dead_end_pos:
+                    self.known_dead_ends.add(dead_end_pos)
+                    if msg.content.get('is_trap'):
+                        self.known_traps.add(dead_end_pos)
+                    
+            elif msg.message_type == 'WRONG_PATH':
+                # Another agent found an unproductive path (CAN backtrack but wastes time)
+                wrong_path_pos = msg.content.get('position')
+                if wrong_path_pos:
+                    self.known_wrong_paths.add(wrong_path_pos)
+                    
+            elif msg.message_type == 'EXIT_FOUND':
+                # Another agent found the exit! Get the path!
+                self.exit_location = msg.content.get('position')
+                self.exit_path = msg.content.get('path')  # Get the successful path
+                self.should_evacuate = True
+                print(f"DEBUG: Agent {self.id} received EXIT_FOUND message! Path length: {len(self.exit_path) if self.exit_path else 0}")
+                
+            elif msg.message_type == 'PATH_SHARED':
+                # Another agent shared a useful path
+                pass  # Could use this to guide exploration
+    
+    def decide_next_move(self, maze, blackboard, communication_protocol):
         """
         Decide the next move based on:
-        1. Known information from blackboard
-        2. Local perception
-        3. Exploration strategy
+        1. Check if at exit (ALWAYS CHECK FIRST!)
+        2. EXIT_FOUND message with path (HIGHEST PRIORITY - follow the path!)
+        3. Known information from blackboard
+        4. Local perception
+        5. Exploration strategy
         """
         current_pos = self.get_position()
+        current_cell = maze.get_cell(self.x, self.y)
         
-        # Check if at exit
-        if maze.get_cell(self.x, self.y).is_exit:
-            self.reached_exit = True
-            blackboard.add_path_to_exit(self.path_history, self.id)
+        # PRIORITY 0: Check if at exit (ALWAYS CHECK FIRST!)
+        if current_cell and current_cell.is_exit:
+            if not self.reached_exit:
+                self.reached_exit = True
+                
+                # Calculate CLEAN path from start to exit (no dead ends, no backtracking)
+                clean_path = self._calculate_clean_path(maze)
+                
+                # BROADCAST: I found the exit AND share the CLEAN path!
+                communication_protocol.broadcast(
+                    self.id, 
+                    'EXIT_FOUND', 
+                    {
+                        'position': current_pos, 
+                        'agent_id': self.id,
+                        'path': clean_path  # Share the CLEAN path without dead ends!
+                    }
+                )
+                blackboard.add_path_to_exit(clean_path, self.id)
+                blackboard.post_message(self.id, 'exit_found', {'position': current_pos})
+            return None  # Stay at exit
+        
+        # CHECK: Are we on a TRUE DEAD END cell? (Cannot move at all!)
+        if current_cell and current_cell.is_dead_end:
+            # We stepped on a dead end cell - we're DEAD! No escape, no rescue!
+            # This agent is finished - permanently stuck
+            if not self.reached_exit and not self.is_dead:
+                print(f"Agent {self.id} DIED in dead end at {current_pos}! RIP ☠️")
+                self.is_dead = True  # Mark as permanently dead
+                
+                # Broadcast that we died here - warn others!
+                communication_protocol.broadcast(
+                    self.id,
+                    'DEAD_END',
+                    {
+                        'position': current_pos,
+                        'agent_id': self.id,
+                        'is_trap': True,
+                        'message': f'Agent {self.id} DIED in dead end! AVOID THIS CELL!'
+                    }
+                )
+                blackboard.add_dead_end(current_pos, self.id)
+            
+            # Cannot move - permanently stuck (DEAD)
             return None
         
-        # Get valid neighbors
+        # PRIORITY 1: If exit found and we have the path, FOLLOW IT EXACTLY!
+        # STOP ALL OTHER EXPLORATION - evacuation is top priority!
+        if self.should_evacuate and self.exit_path:
+            # Check if current position is in the path
+            if current_pos in self.exit_path:
+                # We're on the path! Follow it to exit
+                current_index = self.exit_path.index(current_pos)
+                if current_index < len(self.exit_path) - 1:
+                    # Move to next step on the path
+                    next_step = self.exit_path[current_index + 1]
+                    neighbors = maze.get_neighbors(self.x, self.y)
+                    if next_step in neighbors:
+                        return next_step
+                    # If next step not accessible, try to navigate around
+                    if neighbors:
+                        # CRITICAL: Filter out dead ends FIRST!
+                        safe_neighbors = []
+                        for n in neighbors:
+                            cell = maze.get_cell(n[0], n[1])
+                            if cell and cell.is_dead_end:
+                                # Don't go to dead ends during evacuation!
+                                continue
+                            safe_neighbors.append(n)
+                        
+                        if not safe_neighbors:
+                            # No safe way around - stuck
+                            return None
+                        
+                        # Filter out last position to prevent oscillation
+                        available_neighbors = safe_neighbors
+                        if self.last_position and self.last_position in available_neighbors:
+                            temp = [n for n in available_neighbors if n != self.last_position]
+                            if temp:  # Only filter if we have other options
+                                available_neighbors = temp
+                        
+                        # Also avoid cells we've visited very recently (last 3 positions)
+                        recent_positions = set(self.path_history[-3:]) if len(self.path_history) >= 3 else set()
+                        unvisited = [n for n in available_neighbors if n not in recent_positions]
+                        if unvisited:
+                            available_neighbors = unvisited
+                        
+                        if available_neighbors:
+                            best_neighbor = min(available_neighbors,
+                                              key=lambda n: abs(n[0] - next_step[0]) + 
+                                                          abs(n[1] - next_step[1]))
+                            return best_neighbor
+                else:
+                    # We're at the last position in path - should be at exit
+                    return None
+            
+            # Not on path yet - navigate TO the path first
+            # Find closest position on the exit path
+            closest_path_pos = min(self.exit_path, 
+                                 key=lambda p: abs(p[0] - self.x) + abs(p[1] - self.y))
+            
+            # Move toward the closest path position
+            neighbors = maze.get_neighbors(self.x, self.y)
+            
+            # CRITICAL: Filter out dead ends FIRST!
+            safe_neighbors = []
+            for n in neighbors:
+                cell = maze.get_cell(n[0], n[1])
+                if cell and cell.is_dead_end:
+                    # Don't go to dead ends during evacuation!
+                    continue
+                safe_neighbors.append(n)
+            
+            if not safe_neighbors:
+                # No safe neighbors - stuck
+                return None
+            
+            if closest_path_pos in safe_neighbors:
+                return closest_path_pos
+            
+            if safe_neighbors:
+                # Filter out last position to prevent oscillation
+                available_neighbors = safe_neighbors
+                if self.last_position and self.last_position in available_neighbors:
+                    temp = [n for n in available_neighbors if n != self.last_position]
+                    if temp:  # Only filter if we have other options
+                        available_neighbors = temp
+                
+                # Also avoid cells we've visited very recently (last 3 positions)
+                recent_positions = set(self.path_history[-3:]) if len(self.path_history) >= 3 else set()
+                unvisited = [n for n in available_neighbors if n not in recent_positions]
+                unvisited = [n for n in available_neighbors if n not in recent_positions]
+                if unvisited:
+                    available_neighbors = unvisited
+                
+                if available_neighbors:
+                    best_neighbor = min(available_neighbors,
+                                      key=lambda n: abs(n[0] - closest_path_pos[0]) + 
+                                                  abs(n[1] - closest_path_pos[1]))
+                    return best_neighbor
+            
+            # No valid neighbors - stuck, return None
+            return None
+        
+        # PRIORITY 1B: If exit found but no path yet, navigate toward exit location
+        if self.should_evacuate and self.exit_location:
+            neighbors = maze.get_neighbors(self.x, self.y)
+            
+            # CRITICAL: Filter out dead ends FIRST!
+            safe_neighbors = []
+            for n in neighbors:
+                cell = maze.get_cell(n[0], n[1])
+                if cell and cell.is_dead_end:
+                    # Don't go to dead ends during evacuation!
+                    continue
+                safe_neighbors.append(n)
+            
+            if not safe_neighbors:
+                # No safe neighbors - stuck
+                return None
+            
+            if self.exit_location in safe_neighbors:
+                return self.exit_location
+            
+            if safe_neighbors:
+                # Filter out last position to prevent oscillation
+                available_neighbors = safe_neighbors
+                if self.last_position and self.last_position in available_neighbors:
+                    temp = [n for n in available_neighbors if n != self.last_position]
+                    if temp:  # Only filter if we have other options
+                        available_neighbors = temp
+                
+                # Also avoid cells we've visited very recently (last 3 positions)
+                recent_positions = set(self.path_history[-3:]) if len(self.path_history) >= 3 else set()
+                unvisited = [n for n in available_neighbors if n not in recent_positions]
+                if unvisited:
+                    available_neighbors = unvisited
+                
+                if available_neighbors:
+                    best_neighbor = min(available_neighbors, 
+                                      key=lambda n: abs(n[0] - self.exit_location[0]) + 
+                                                  abs(n[1] - self.exit_location[1]))
+                    return best_neighbor
+            
+            # No valid neighbors - return None
+            return None
+        
+        # Check if we're in a trap (only broadcast once)
+        if current_cell and current_cell.is_trap and current_pos not in self.known_traps:
+            # BROADCAST: I'm in a trap!
+            communication_protocol.broadcast(
+                self.id,
+                'DEAD_END',
+                {
+                    'position': current_pos, 
+                    'agent_id': self.id,
+                    'is_trap': True,
+                    'message': f'Agent {self.id} found a trap zone!'
+                }
+            )
+            blackboard.add_dead_end(current_pos, self.id)
+            self.known_traps.add(current_pos)
+        
+        # Get ALL neighbors
         neighbors = maze.get_neighbors(self.x, self.y)
         
-        # Filter out dead ends and walls
-        valid_neighbors = [
-            n for n in neighbors 
-            if not blackboard.is_dead_end(n)
-        ]
+        # Filter out ONLY known dead ends from messages or blackboard
+        # BUT: If we have the exit path (evacuation mode), also filter out actual dead end cells!
+        safe_neighbors = []
+        for n in neighbors:
+            # Skip if in our known dead ends (from messages or experience)
+            if n in self.known_dead_ends:
+                continue
+            # Skip if in our known traps (from messages)
+            if n in self.known_traps:
+                continue
+            # Skip if blackboard knows it's a dead end (another agent reported it)
+            if blackboard.is_dead_end(n):
+                continue
+            
+            # CRITICAL: If we're evacuating (exit found), check the actual cell to avoid dead ends!
+            if self.should_evacuate:
+                cell = maze.get_cell(n[0], n[1])
+                if cell and cell.is_dead_end:
+                    # Don't go there! We know the exit path, no need to explore dead ends!
+                    continue
+            
+            # This neighbor is safe (or unknown - which is fine for exploration!)
+            safe_neighbors.append(n)
+        
+        # Further filter: deprioritize wrong paths (can still use if needed)
+        preferred_neighbors = [n for n in safe_neighbors if n not in self.known_wrong_paths]
+        
+        # Also avoid cells we've already explored multiple times (unless necessary)
+        # Count how many times we've visited each safe neighbor
+        visit_counts = {}
+        for n in safe_neighbors:
+            visit_counts[n] = sum(1 for pos in self.path_history if pos == n)
+        
+        # Prefer unvisited or rarely visited cells
+        fresh_neighbors = [n for n in safe_neighbors if visit_counts.get(n, 0) <= 1]
+        
+        # Use best available neighbors in priority order
+        if fresh_neighbors:
+            valid_neighbors = fresh_neighbors
+        elif preferred_neighbors:
+            valid_neighbors = preferred_neighbors
+        else:
+            valid_neighbors = safe_neighbors
         
         if not valid_neighbors:
-            # Mark current position as dead end
+            # This is a dead end! Tell everyone so they don't come here!
             blackboard.add_dead_end(current_pos, self.id)
-            # Backtrack
+            
+            # Check if it's a trap
+            is_trap = current_cell and current_cell.is_trap
+            
+            # BROADCAST: Dead end found here! DON'T COME HERE!
+            communication_protocol.broadcast(
+                self.id,
+                'DEAD_END',
+                {
+                    'position': current_pos, 
+                    'agent_id': self.id,
+                    'is_trap': is_trap
+                }
+            )
+            
+            # Backtrack if possible
             if len(self.path_history) > 1:
                 self.path_history.pop()
-                return self.path_history[-1]
+                backtrack_pos = self.path_history[-1]
+                self.backtrack_positions.add(current_pos)
+                
+                # BROADCAST: Wrong path - had to backtrack
+                communication_protocol.broadcast(
+                    self.id,
+                    'WRONG_PATH',
+                    {
+                        'position': current_pos,
+                        'agent_id': self.id,
+                        'message': f'Agent {self.id} backtracking from dead end'
+                    }
+                )
+                
+                return backtrack_pos
             return None
         
         # Strategy 1: Move toward exit if visible
         for nx, ny in valid_neighbors:
-            if maze.get_cell(nx, ny).is_exit:
+            cell = maze.get_cell(nx, ny)
+            if cell and cell.is_exit:
+                blackboard.post_message(self.id, 'exit_visible', {'position': (nx, ny)})
                 return (nx, ny)
         
-        # Strategy 2: Explore unexplored areas
-        unexplored = [n for n in valid_neighbors if not blackboard.is_explored(n)]
+        # Strategy 2: Prioritize UNVISITED cells to avoid re-exploration
+        unvisited = [n for n in valid_neighbors if n not in self.path_history]
         
-        if unexplored:
+        if unvisited:
             # Check if target is assigned via negotiation
-            if self.current_target and self.current_target in unexplored:
+            if self.current_target and self.current_target in unvisited:
                 return self.current_target
             
-            # Choose closest unexplored
-            target = min(unexplored, key=lambda n: self.manhattan_distance(n))
+            # Choose unvisited cell (prefer unexplored by blackboard too)
+            unexplored_by_all = [n for n in unvisited if not blackboard.is_explored(n)]
+            
+            if unexplored_by_all:
+                target = min(unexplored_by_all, key=lambda n: self.manhattan_distance(n))
+            else:
+                target = min(unvisited, key=lambda n: self.manhattan_distance(n))
+            
             self.current_target = target
             blackboard.update_agent_target(self.id, target)
+            blackboard.post_message(self.id, 'exploring', {'target': target})
             return target
         
-        # Strategy 3: Move to least visited neighbor
+        # Strategy 3: All neighbors visited - choose least visited
+        # This means we're likely backtracking or in a complex area
         visit_counts = {}
         for n in valid_neighbors:
             visit_counts[n] = sum(1 for pos in self.path_history if pos == n)
         
-        target = min(visit_counts.items(), key=lambda x: x[1])[0]
-        return target
+        if visit_counts:
+            # Check if we're going in circles
+            max_visits = max(visit_counts.values())
+            if max_visits > 3:  # Been here too many times - wrong path!
+                # BROADCAST: This area seems unproductive (WRONG_PATH)
+                communication_protocol.broadcast(
+                    self.id,
+                    'WRONG_PATH',
+                    {
+                        'position': current_pos,
+                        'agent_id': self.id,
+                        'message': f'Agent {self.id} going in circles, likely wrong path'
+                    }
+                )
+                self.backtrack_positions.add(current_pos)
+            
+            target = min(visit_counts.items(), key=lambda x: x[1])[0]
+            return target
+        
+        return None
+    
+    def _calculate_clean_path(self, maze):
+        """
+        Calculate clean path from start to current position (exit) using BFS.
+        This avoids dead ends and gives the shortest path.
+        """
+        from collections import deque
+        
+        start = maze.start_pos
+        goal = self.get_position()
+        
+        # BFS to find shortest path
+        queue = deque([(start, [start])])
+        visited = {start}
+        
+        while queue:
+            current, path = queue.popleft()
+            
+            if current == goal:
+                return path
+            
+            # Get neighbors
+            neighbors = maze.get_neighbors(current[0], current[1])
+            for neighbor in neighbors:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, path + [neighbor]))
+        
+        # Fallback: if BFS fails, return path_history
+        return self.path_history.copy()
     
     def move(self, target_pos):
-        """Move to target position"""
+        """Move to target position - no energy consumption"""
         if target_pos:
+            self.last_position = (self.x, self.y)  # Remember where we came from
             self.x, self.y = target_pos
             self.path_history.append(target_pos)
-            self.energy -= 1
+            # No energy consumption - agents can explore indefinitely
             
     def share_knowledge(self, blackboard):
         """Share discovered information with the blackboard"""
@@ -141,8 +513,8 @@ class RobotAgent:
                 cell.explored_by.add(self.id)
     
     def is_active(self):
-        """Check if agent can still act"""
-        return self.energy > 0 and not self.reached_exit
+        """Check if agent can still act - no energy limit, only death or exit matters"""
+        return not self.reached_exit and not self.is_dead
     
     def __repr__(self):
         return f"Robot{self.id}@({self.x},{self.y})"

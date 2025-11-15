@@ -13,15 +13,17 @@ def run_visualization_mode(args):
     """Run simulation with pygame visualization"""
     print("Starting Multi-Agent Maze Escape Simulation...")
     print(f"Maze Size: {config.MAZE_WIDTH}x{config.MAZE_HEIGHT}")
-    print(f"Number of Agents: {config.NUM_AGENTS}")
-    print(f"Max Steps: {config.MAX_STEPS}\n")
+    print(f"Max Steps: {config.MAX_STEPS}")
+    print(f"Using: {'Fixed Maze' if not args.random_maze else 'Random Maze'}\n")
     
-    # Create maze
-    maze = Maze(config.MAZE_WIDTH, config.MAZE_HEIGHT, config.WALL_DENSITY)
+    # Create maze (fixed by default for better reliability)
+    maze = Maze(config.MAZE_WIDTH, config.MAZE_HEIGHT, config.WALL_DENSITY, 
+                use_fixed_maze=not args.random_maze)
     maze.generate()
     print("Maze generated successfully!")
+    print(f"Start: {maze.start_pos}, Exit: {maze.exit_pos}\n")
     
-    # Create simulator
+    # Create initial simulator with default number of agents
     simulator = Simulator(
         maze,
         config.NUM_AGENTS,
@@ -30,17 +32,20 @@ def run_visualization_mode(args):
         config.COMMUNICATION_RANGE
     )
     
-    print(f"Created {config.NUM_AGENTS} robot agents")
-    print(f"Start Position: {maze.start_pos}")
-    print(f"Exit Position: {maze.exit_pos}\n")
+    # Create renderer - it will handle agent selection on startup
+    renderer = Renderer(maze, simulator)
     
+    # Show agent selection first
+    renderer.selecting_agents = True
+    renderer.paused = True
+    
+    print("Select number of agents to start...")
     print("Controls:")
     print("  ESC or Close Window: Exit")
-    print("  R: Reset simulation")
+    print("  R: Reset and select agents again")
     print("  SPACE: Pause/Unpause\n")
     
-    # Create and run renderer
-    renderer = Renderer(maze, simulator)
+    # Run renderer
     results = renderer.run(max_steps=config.MAX_STEPS)
     
     # Print results
@@ -63,8 +68,9 @@ def run_benchmark_mode(args):
     print("Running Performance Benchmark...")
     print("This will test multiple agent configurations\n")
     
-    # Create maze
-    maze = Maze(config.MAZE_WIDTH, config.MAZE_HEIGHT, config.WALL_DENSITY)
+    # Create maze (use fixed maze for consistent benchmarking)
+    maze = Maze(config.MAZE_WIDTH, config.MAZE_HEIGHT, config.WALL_DENSITY, 
+                use_fixed_maze=not args.random_maze)
     
     # Create metrics collector
     metrics = MetricsCollector()
@@ -74,7 +80,8 @@ def run_benchmark_mode(args):
     trials = args.trials if args.trials else 5
     
     print(f"Agent counts to test: {agent_counts}")
-    print(f"Trials per configuration: {trials}\n")
+    print(f"Trials per configuration: {trials}")
+    print(f"Using: {'Fixed Maze' if not args.random_maze else 'Random Maze'}\n")
     
     # Run comparison
     comparison_data = metrics.compare_agent_counts(
@@ -124,6 +131,12 @@ def main():
         '--no-plot',
         action='store_true',
         help='Disable plotting in benchmark mode'
+    )
+    
+    parser.add_argument(
+        '--random-maze',
+        action='store_true',
+        help='Use random maze generation instead of fixed maze (may be unsolvable)'
     )
     
     args = parser.parse_args()

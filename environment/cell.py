@@ -11,6 +11,7 @@ class Cell:
         self.is_exit = False
         self.visited = False
         self.is_dead_end = False
+        self.is_trap = False  # NEW: True for dead-end traps with no escape
         self.explored_by = set()  # Set of agent IDs that have explored this cell
         
     def __repr__(self):

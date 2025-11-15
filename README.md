@@ -77,10 +77,27 @@ Run the simulation with real-time pygame visualization:
 python main.py
 ```
 
-**Controls:**
+**Interactive Controls:**
+- `SPACE`: Pause/Resume simulation
+- `↑/↓ Arrow Keys`: Increase/Decrease simulation speed (1-10 steps/sec)
+- `S`: Single step (when paused) - execute one step at a time
+- `R`: Reset simulation to beginning
 - `ESC` or Close Window: Exit simulation
-- `R`: Reset simulation
-- `SPACE`: Pause/Unpause (optional)
+
+**Features:**
+- Real-time agent communication visualization (expanding circles)
+- Message log showing agent activities
+- Communication range indicators
+- Path trails and target indicators
+- Agent status and statistics
+
+### Using Random Maze (Optional)
+
+By default, the simulation uses a fixed, guaranteed-solvable maze. To use random generation:
+
+```bash
+python main.py --random-maze
+```
 
 ### Benchmark Mode
 
@@ -98,7 +115,10 @@ python main.py --mode benchmark --agents 1 5 10 --trials 10
 
 # Disable plotting
 python main.py --mode benchmark --no-plot
-```
+
+# Use random maze for benchmarking
+python main.py --mode benchmark --random-maze
+````
 
 ## ⚙️ Configuration
 

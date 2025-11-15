@@ -2,6 +2,7 @@
 
 import time
 from agents.robot_agent import RobotAgent
+from agents.communication import CommunicationProtocol
 from coordination.blackboard import Blackboard
 from coordination.negotiation import Negotiator
 
@@ -13,6 +14,9 @@ class Simulator:
         self.num_agents = num_agents
         self.blackboard = Blackboard()
         self.blackboard.maze = maze  # Give blackboard access to maze
+        
+        # Initialize communication protocol
+        self.communication = CommunicationProtocol()
         
         # Create agents at start position
         start_x, start_y = maze.start_pos
@@ -39,11 +43,16 @@ class Simulator:
         
         self.step_count += 1
         
-        # Check if any agent reached exit
+        # Mark the first agent to reach exit as winner
         for agent in self.agents:
             if agent.reached_exit and not self.winner_agent:
                 self.winner_agent = agent
-                self.simulation_complete = True
+        
+        # Check if ALL agents are finished (either at exit OR dead)
+        all_finished = all(agent.reached_exit or agent.is_dead for agent in self.agents)
+        if all_finished:
+            self.simulation_complete = True
+            return False
         
         # Each agent perceives and acts
         active_agents = [a for a in self.agents if a.is_active()]
@@ -52,7 +61,11 @@ class Simulator:
             self.simulation_complete = True
             return False
         
-        # Coordinate exploration (negotiation phase)
+        # STEP 1: All agents process incoming messages
+        for agent in active_agents:
+            agent.process_messages(self.communication)
+        
+        # STEP 2: Coordinate exploration (negotiation phase)
         assignments = Negotiator.coordinate_exploration(active_agents, self.maze, self.blackboard)
         
         # Update agent targets based on negotiation
@@ -61,20 +74,45 @@ class Simulator:
                 if agent.id == agent_id:
                     agent.current_target = target
         
-        # Each agent takes action
+        # STEP 3: Each agent decides a move (but we will resolve conflicts before executing)
+        desired_moves = {}   # agent_id -> desired_position or None
+        position_requests = {}  # position -> list of agents wanting it
+
+        # First: each agent perceives and decides their desired next position
         for agent in active_agents:
-            # Perceive environment
             agent.perceive_environment(self.maze)
-            
-            # Decide next move
-            next_pos = agent.decide_next_move(self.maze, self.blackboard)
-            
-            # Execute move
+            next_pos = agent.decide_next_move(self.maze, self.blackboard, self.communication)
+            desired_moves[agent.id] = next_pos
             if next_pos:
+                position_requests.setdefault(next_pos, []).append(agent)
+
+        # Resolve conflicts where multiple agents want the same target
+        allowed_moves = set()
+        for pos, agents_wanting in position_requests.items():
+            if len(agents_wanting) == 1:
+                # Only one agent wants this position - allow it
+                allowed_moves.add((agents_wanting[0].id, pos))
+            else:
+                # Multiple agents want the same position - pick ONE winner
+                # Priority: lower agent ID (deterministic, fair over time)
+                agents_wanting.sort(key=lambda a: a.id)
+                chosen = agents_wanting[0]
+                allowed_moves.add((chosen.id, pos))
+                print(f"CONFLICT at {pos}: Agents {[a.id for a in agents_wanting]} want it, Agent {chosen.id} gets priority")
+                # Others will be denied this move this step
+
+        # STEP 4: Execute allowed moves and share knowledge
+        for agent in active_agents:
+            next_pos = desired_moves.get(agent.id)
+            if next_pos and (agent.id, next_pos) in allowed_moves:
                 agent.move(next_pos)
-            
-            # Share knowledge
+            # else: move denied (collision or no move)
+
+            # Share knowledge regardless of whether we moved
             agent.share_knowledge(self.blackboard)
+        
+        # STEP 4: Clean up old messages
+        self.communication.clear_old_messages()
         
         return True
     

@@ -1,6 +1,7 @@
 from .maze import Maze
-from .cell import Cel
+from .cell import Cell
 
 __all__ = ['Maze', 'Cell']
 
 # Environment package initialization
+
