@@ -1,35 +1,30 @@
-# Cell class for maze grid
+# environment/cell.py
 
 class Cell:
-    """
-    Cell class representing a single cell in the maze grid
-    """
+    """Represents a single cell in the maze grid"""
     
     def __init__(self, x, y):
-        """
-        Initialize a cell with coordinates
-        
-        Args:
-            x: X coordinate
-            y: Y coordinate
-        """
         self.x = x
         self.y = y
-        self.walls = {'top': True, 'right': True, 'bottom': True, 'left': True}
+        self.is_wall = False
+        self.is_start = False
+        self.is_exit = False
         self.visited = False
+        self.is_dead_end = False
+        self.explored_by = set()  # Set of agent IDs that have explored this cell
         
-    def remove_wall(self, direction):
-        """
-        Remove wall in specified direction
-        
-        Args:
-            direction: Direction of wall to remove ('top', 'right', 'bottom', 'left')
-        """
-        if direction in self.walls:
-            self.walls[direction] = False
+    def __repr__(self):
+        return f"Cell({self.x}, {self.y})"
     
-    def has_wall(self, direction):
-        """
-        Check if cell has a wall in specified direction
-        """
-        return self.walls.get(direction, True)
+    def __eq__(self, other):
+        if isinstance(other, Cell):
+            return self.x == other.x and self.y == other.y
+        return False
+    
+    def __hash__(self):
+        return hash((self.x, self.y))
+    
+    def reset_exploration(self):
+        """Reset exploration status"""
+        self.visited = False
+        self.explored_by.clear()
