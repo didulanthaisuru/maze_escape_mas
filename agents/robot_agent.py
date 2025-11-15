@@ -27,6 +27,8 @@ class RobotAgent:
         self.stuck_counter = 0
         self.backtrack_positions = set()  # Positions we've backtracked from (WRONG_PATH)
         self.last_position = None  # Track previous position to prevent immediate backtracking
+        self.stuck_in_loop_counter = 0  # Count how many steps we've been in same area
+        self.recent_positions = deque(maxlen=10)  # Track last 10 positions for loop detection
         
         # Communication
         self.known_dead_ends = set()  # Dead ends learned from messages (TRUE dead ends - can't go back)
@@ -118,6 +120,28 @@ class RobotAgent:
         current_pos = self.get_position()
         current_cell = maze.get_cell(self.x, self.y)
         
+        # Track position for oscillation detection
+        self.recent_positions.append(current_pos)
+        
+        # OSCILLATION DETECTION: If stuck in a loop, force a random move
+        if len(self.recent_positions) == 10:
+            # Check if we're oscillating between same 2-3 positions
+            unique_recent = set(self.recent_positions)
+            if len(unique_recent) <= 3:
+                # We're stuck oscillating!
+                self.stuck_in_loop_counter += 1
+                print(f"Agent {self.id} oscillating between {unique_recent}! Counter: {self.stuck_in_loop_counter}")
+                
+                if self.stuck_in_loop_counter > 5:
+                    # Force staying put to wait for rescue
+                    print(f"Agent {self.id} stuck oscillating - STAYING PUT and waiting")
+                    self.stuck_in_loop_counter = 0  # Reset counter
+                    self.recent_positions.clear()  # Clear history
+                    return None  # Stay put and wait
+            else:
+                # We're moving around OK, reset counter
+                self.stuck_in_loop_counter = 0
+        
         # PRIORITY 0: Check if at exit (ALWAYS CHECK FIRST!)
         if current_cell and current_cell.is_exit:
             if not self.reached_exit:
@@ -167,97 +191,100 @@ class RobotAgent:
         # PRIORITY 1: If exit found and we have the path, FOLLOW IT EXACTLY!
         # STOP ALL OTHER EXPLORATION - evacuation is top priority!
         if self.should_evacuate and self.exit_path:
-            # Check if current position is in the path
+            # Use BFS to find shortest path from current position to ANY point on the exit path
+            # This is MUCH smarter than just moving towards closest point!
+            from collections import deque
+            
+            def bfs_to_exit_path():
+                """Find shortest path from current position to the exit path using BFS"""
+                queue = deque([(current_pos, [current_pos])])
+                visited = {current_pos}
+                
+                while queue:
+                    pos, path = queue.popleft()
+                    
+                    # If we reached the exit path, return the next step!
+                    if pos in self.exit_path:
+                        # Return the SECOND element in path (first step to take)
+                        if len(path) > 1:
+                            return path[1]  # Next immediate step
+                        return None  # Already on path
+                    
+                    # Explore neighbors
+                    for neighbor in maze.get_neighbors(pos[0], pos[1]):
+                        if neighbor in visited:
+                            continue
+                        
+                        # Check if neighbor is safe (not wall, not dead end)
+                        cell = maze.get_cell(neighbor[0], neighbor[1])
+                        if not cell or cell.is_wall:
+                            continue
+                        
+                        # ONLY avoid dead ends if we know about them
+                        # Don't be too picky - we need to escape!
+                        if cell.is_dead_end:
+                            continue
+                        
+                        visited.add(neighbor)
+                        queue.append((neighbor, path + [neighbor]))
+                
+                return None  # No path found
+            
+            # Check if we're already on the exit path
             if current_pos in self.exit_path:
                 # We're on the path! Follow it to exit
                 current_index = self.exit_path.index(current_pos)
                 if current_index < len(self.exit_path) - 1:
                     # Move to next step on the path
                     next_step = self.exit_path[current_index + 1]
+                    
+                    # Check if next step is accessible
                     neighbors = maze.get_neighbors(self.x, self.y)
                     if next_step in neighbors:
-                        return next_step
-                    # If next step not accessible, try to navigate around
-                    if neighbors:
-                        # CRITICAL: Filter out dead ends FIRST!
-                        safe_neighbors = []
-                        for n in neighbors:
-                            cell = maze.get_cell(n[0], n[1])
-                            if cell and cell.is_dead_end:
-                                # Don't go to dead ends during evacuation!
-                                continue
-                            safe_neighbors.append(n)
-                        
-                        if not safe_neighbors:
-                            # No safe way around - stuck
-                            return None
-                        
-                        # Filter out last position to prevent oscillation
-                        available_neighbors = safe_neighbors
-                        if self.last_position and self.last_position in available_neighbors:
-                            temp = [n for n in available_neighbors if n != self.last_position]
-                            if temp:  # Only filter if we have other options
-                                available_neighbors = temp
-                        
-                        # Also avoid cells we've visited very recently (last 3 positions)
-                        recent_positions = set(self.path_history[-3:]) if len(self.path_history) >= 3 else set()
-                        unvisited = [n for n in available_neighbors if n not in recent_positions]
-                        if unvisited:
-                            available_neighbors = unvisited
-                        
-                        if available_neighbors:
-                            best_neighbor = min(available_neighbors,
-                                              key=lambda n: abs(n[0] - next_step[0]) + 
-                                                          abs(n[1] - next_step[1]))
-                            return best_neighbor
+                        next_cell = maze.get_cell(next_step[0], next_step[1])
+                        if next_cell and not next_cell.is_wall:
+                            return next_step
+                    
+                    # Next step blocked! Use BFS to navigate around obstacle
+                    print(f"Agent {self.id} on path but next step {next_step} blocked! Finding alternate route...")
+                    alternate = bfs_to_exit_path()
+                    if alternate:
+                        return alternate
+                    
+                    # If BFS fails, just pick best available neighbor toward exit
+                    safe_neighbors = [n for n in neighbors if not maze.get_cell(n[0], n[1]).is_wall]
+                    if safe_neighbors:
+                        # Move toward exit
+                        exit_pos = self.exit_path[-1]
+                        best = min(safe_neighbors, key=lambda n: abs(n[0] - exit_pos[0]) + abs(n[1] - exit_pos[1]))
+                        return best
+                    
+                    print(f"Agent {self.id} STUCK on path! Staying put...")
+                    return None  # Stay put - don't die
                 else:
-                    # We're at the last position in path - should be at exit
+                    # We're at the end of path - should be at exit
                     return None
             
-            # Not on path yet - navigate TO the path first
-            # Find closest position on the exit path
-            closest_path_pos = min(self.exit_path, 
-                                 key=lambda p: abs(p[0] - self.x) + abs(p[1] - self.y))
+            # Not on path yet - use BFS to find shortest route TO the path
+            next_move = bfs_to_exit_path()
+            if next_move:
+                return next_move
             
-            # Move toward the closest path position
+            # BFS failed - fall back to simple navigation toward closest path point
+            print(f"Agent {self.id} BFS failed! Using simple navigation...")
+            closest_path_pos = min(self.exit_path, key=lambda p: abs(p[0] - self.x) + abs(p[1] - self.y))
             neighbors = maze.get_neighbors(self.x, self.y)
-            
-            # CRITICAL: Filter out dead ends FIRST!
-            safe_neighbors = []
-            for n in neighbors:
-                cell = maze.get_cell(n[0], n[1])
-                if cell and cell.is_dead_end:
-                    # Don't go to dead ends during evacuation!
-                    continue
-                safe_neighbors.append(n)
-            
-            if not safe_neighbors:
-                # No safe neighbors - stuck
-                return None
+            safe_neighbors = [n for n in neighbors if not maze.get_cell(n[0], n[1]).is_wall 
+                            and not maze.get_cell(n[0], n[1]).is_dead_end]
             
             if closest_path_pos in safe_neighbors:
                 return closest_path_pos
             
             if safe_neighbors:
-                # Filter out last position to prevent oscillation
-                available_neighbors = safe_neighbors
-                if self.last_position and self.last_position in available_neighbors:
-                    temp = [n for n in available_neighbors if n != self.last_position]
-                    if temp:  # Only filter if we have other options
-                        available_neighbors = temp
-                
-                # Also avoid cells we've visited very recently (last 3 positions)
-                recent_positions = set(self.path_history[-3:]) if len(self.path_history) >= 3 else set()
-                unvisited = [n for n in available_neighbors if n not in recent_positions]
-                unvisited = [n for n in available_neighbors if n not in recent_positions]
-                if unvisited:
-                    available_neighbors = unvisited
-                
-                if available_neighbors:
-                    best_neighbor = min(available_neighbors,
-                                      key=lambda n: abs(n[0] - closest_path_pos[0]) + 
-                                                  abs(n[1] - closest_path_pos[1]))
-                    return best_neighbor
+                best_neighbor = min(safe_neighbors,
+                                  key=lambda n: abs(n[0] - closest_path_pos[0]) + 
+                                              abs(n[1] - closest_path_pos[1]))
+                return best_neighbor
             
             # No valid neighbors - stuck, return None
             return None
@@ -276,7 +303,16 @@ class RobotAgent:
                 safe_neighbors.append(n)
             
             if not safe_neighbors:
-                # No safe neighbors - stuck
+                # No safe neighbors - backtrack if possible
+                print(f"Agent {self.id} stuck navigating to exit location! Attempting backtrack.")
+                if len(self.path_history) > 1:
+                    prev_pos = self.path_history[-2]
+                    all_neighbors = maze.get_neighbors(self.x, self.y)
+                    if prev_pos in all_neighbors:
+                        prev_cell = maze.get_cell(prev_pos[0], prev_pos[1])
+                        if prev_cell and not prev_cell.is_dead_end:
+                            return prev_pos
+                # Stay put instead of dying
                 return None
             
             if self.exit_location in safe_neighbors:

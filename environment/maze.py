@@ -43,14 +43,20 @@ class Maze:
         self.start_pos = (2, 2)
         self.exit_pos = (self.width - 3, self.height - 3)
         
+        # CRITICAL ORDER CHANGE: Create winding path FIRST before anything else
+        self._create_complex_winding_path()
+        
         # Create a DENSE maze using recursive backtracking-like pattern
         self._carve_maze_passages()
+        
+        # BLOCK all direct shortcuts with walls
+        self._block_direct_paths()
         
         # Add strategic walls to create more complexity
         self._add_maze_walls()
         
-        # FIRST: Ensure solvable path exists and mark it
-        self._ensure_solvable_path()
+        # Verify path still exists (should be the winding one we created)
+        self._verify_path_exists()
         
         # THEN: Create dead ends AWAY from the correct path
         self._create_dead_end_corridors()
@@ -69,84 +75,256 @@ class Maze:
         self.grid[self.exit_pos[0]][self.exit_pos[1]].is_exit = True
     
     def _carve_maze_passages(self):
-        """Carve passages through the walls to create a maze"""
-        # Create a grid-based maze with corridors
+        """Carve passages through the walls to create a DENSE maze with narrow corridors"""
+        # Use recursive backtracking to create maze-like passages
+        # This creates a more organic, less grid-like structure
         
-        # Horizontal corridors
-        for y in range(2, self.height - 2, 3):
-            for x in range(2, self.width - 2):
-                self.grid[x][y].is_wall = False
+        visited = set()
+        stack = []
         
-        # Vertical corridors
-        for x in range(2, self.width - 2, 3):
-            for y in range(2, self.height - 2):
-                self.grid[x][y].is_wall = False
+        # Start from a random internal point
+        start_x = random.randint(3, self.width - 4)
+        start_y = random.randint(3, self.height - 4)
+        stack.append((start_x, start_y))
         
-        # Add diagonal passages for complexity
-        for i in range(5, min(self.width - 5, self.height - 5), 6):
-            for j in range(-2, 3):
-                x, y = i + j, i + j
-                if 2 < x < self.width - 2 and 2 < y < self.height - 2:
-                    self.grid[x][y].is_wall = False
+        directions = [(0, 2), (2, 0), (0, -2), (-2, 0)]
         
-        # Add some random passages to connect areas
-        for _ in range(40):
+        # Carve passages using recursive backtracking
+        while stack:
+            x, y = stack[-1]
+            self.grid[x][y].is_wall = False
+            visited.add((x, y))
+            
+            # Find unvisited neighbors
+            neighbors = []
+            for dx, dy in directions:
+                nx, ny = x + dx, y + dy
+                if (2 < nx < self.width - 2 and 2 < ny < self.height - 2 and
+                    (nx, ny) not in visited):
+                    neighbors.append((nx, ny, dx, dy))
+            
+            if neighbors:
+                # Choose random neighbor
+                nx, ny, dx, dy = random.choice(neighbors)
+                # Carve path to neighbor
+                self.grid[x + dx // 2][y + dy // 2].is_wall = False
+                stack.append((nx, ny))
+            else:
+                stack.pop()
+        
+        # Add MANY MORE random connections to create multiple paths and loops
+        for _ in range(100):  # Increased from 30 to 100 for MUCH more open maze
             x = random.randint(3, self.width - 4)
             y = random.randint(3, self.height - 4)
             if not self.grid[x][y].is_start and not self.grid[x][y].is_exit:
                 self.grid[x][y].is_wall = False
+                # Also carve adjacent cell to create passage
+                direction = random.choice([(0, 1), (1, 0), (0, -1), (-1, 0)])
+                nx, ny = x + direction[0], y + direction[1]
+                if 2 < nx < self.width - 2 and 2 < ny < self.height - 2:
+                    self.grid[nx][ny].is_wall = False
+    
+    def _create_complex_winding_path(self):
+        """Create the MAIN winding path FIRST - this is the solution path"""
+        sx, sy = self.start_pos
+        ex, ey = self.exit_pos
+        
+        x, y = sx, sy
+        path_cells = [(x, y)]
+        
+        # Create a snake-like winding path with many turns
+        # Use a pattern: right, down, right, down, with some up/left variations
+        direction = 'right'
+        turn_counter = 0
+        
+        while x != ex or y != ey:
+            moved = False
+            
+            if direction == 'right' and x < ex:
+                # Move right for several steps
+                steps = random.randint(4, 8)
+                for _ in range(steps):
+                    if x < ex:
+                        self.grid[x][y].is_wall = False
+                        path_cells.append((x, y))
+                        x += 1
+                        moved = True
+                turn_counter += 1
+                # Next direction - alternate between down and up
+                if y < ey:
+                    direction = 'down'
+                elif y > ey:
+                    direction = 'up'
+                else:
+                    direction = 'right'
+                    
+            elif direction == 'down' and y < ey:
+                # Move down for several steps
+                steps = random.randint(4, 8)
+                for _ in range(steps):
+                    if y < ey:
+                        self.grid[x][y].is_wall = False
+                        path_cells.append((x, y))
+                        y += 1
+                        moved = True
+                turn_counter += 1
+                # Sometimes go left to create zigzag
+                if turn_counter % 3 == 0 and x > sx + 5:
+                    direction = 'left'
+                else:
+                    direction = 'right'
+                    
+            elif direction == 'left' and x > sx + 3:
+                # Move left to create zigzag
+                steps = random.randint(3, 5)
+                for _ in range(steps):
+                    if x > sx + 3:
+                        self.grid[x][y].is_wall = False
+                        path_cells.append((x, y))
+                        x -= 1
+                        moved = True
+                turn_counter += 1
+                direction = 'down' if y < ey else 'right'
+                
+            elif direction == 'up' and y > sy + 3:
+                # Move up occasionally
+                steps = random.randint(2, 4)
+                for _ in range(steps):
+                    if y > sy + 3:
+                        self.grid[x][y].is_wall = False
+                        path_cells.append((x, y))
+                        y -= 1
+                        moved = True
+                turn_counter += 1
+                direction = 'right'
+            
+            # Safety: if stuck, move directly to goal
+            if not moved:
+                if x < ex:
+                    self.grid[x][y].is_wall = False
+                    path_cells.append((x, y))
+                    x += 1
+                elif y < ey:
+                    self.grid[x][y].is_wall = False
+                    path_cells.append((x, y))
+                    y += 1
+                elif x > ex:
+                    self.grid[x][y].is_wall = False
+                    path_cells.append((x, y))
+                    x -= 1
+                elif y > ey:
+                    self.grid[x][y].is_wall = False
+                    path_cells.append((x, y))
+                    y -= 1
+                else:
+                    break
+        
+        # Mark exit
+        self.grid[ex][ey].is_wall = False
+        path_cells.append((ex, ey))
+        
+        # Store the correct path
+        self.correct_path_cells = set(path_cells)
+        
+        # DON'T widen the path - keep it single cell width so it's hidden in the maze
+        # Only ensure cells are passable, don't create obvious corridors
+    
+    def _block_direct_paths(self):
+        """Block SOME direct shortcuts - but not too obviously"""
+        sx, sy = self.start_pos
+        ex, ey = self.exit_pos
+        
+        # Only block a few strategic diagonal shortcuts, not all of them
+        for i in range(sx + 5, ex - 5, 3):  # Every 3rd cell, not every cell
+            for j in range(sy + 5, ey - 5, 3):
+                # If this is on the diagonal, and NOT on our winding path
+                if abs(i - sx - (j - sy)) < 2 and (i, j) not in self.correct_path_cells:
+                    if random.random() < 0.6:  # Only 60% chance to block
+                        self.grid[i][j].is_wall = True
+        
+        # Add some strategic walls but not complete blocks
+        # This makes the correct path less obvious without creating clear barriers
+    
+    def _verify_path_exists(self):
+        """Verify the winding path is still intact"""
+        # Quick BFS check
+        from collections import deque
+        visited = set()
+        queue = deque([self.start_pos])
+        
+        while queue:
+            pos = queue.popleft()
+            if pos == self.exit_pos:
+                return True  # Path exists
+            if pos in visited:
+                continue
+            visited.add(pos)
+            
+            x, y = pos
+            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+                if (0 <= nx < self.width and 0 <= ny < self.height and
+                    not self.grid[nx][ny].is_wall and (nx, ny) not in visited):
+                    queue.append((nx, ny))
+        
+        # If no path, clear the winding path again
+        for px, py in self.correct_path_cells:
+            self.grid[px][py].is_wall = False
+        
+        return False
     
     def _add_maze_walls(self):
-        """Add walls to create more turns and complexity"""
-        # Add strategic wall blocks
+        """Add MINIMAL walls - make maze navigable but still interesting"""
+        # Add strategic wall blocks - but MUCH less aggressive
         wall_patterns = [
-            # L-shaped walls
+            # Simple L-shapes only
             [(0, 0), (1, 0), (0, 1)],
             [(0, 0), (-1, 0), (0, 1)],
             [(0, 0), (1, 0), (0, -1)],
             [(0, 0), (-1, 0), (0, -1)],
-            # T-shaped walls
-            [(0, 0), (1, 0), (-1, 0), (0, 1)],
-            [(0, 0), (1, 0), (-1, 0), (0, -1)],
-            # Plus signs
-            [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)],
         ]
         
-        # Place wall patterns randomly
-        for _ in range(30):
+        # Place FEWER wall patterns - maze should be mostly open
+        for _ in range(10):  # Reduced from 30 to 10
             cx = random.randint(5, self.width - 6)
             cy = random.randint(5, self.height - 6)
             pattern = random.choice(wall_patterns)
             
-            # Place the pattern
+            # Place the pattern - but DON'T block the winding path
             for dx, dy in pattern:
                 x, y = cx + dx, cy + dy
                 if (3 < x < self.width - 3 and 3 < y < self.height - 3 and
-                    not self.grid[x][y].is_start and not self.grid[x][y].is_exit):
+                    not self.grid[x][y].is_start and not self.grid[x][y].is_exit and
+                    (x, y) not in self.correct_path_cells):  # DON'T block winding path
                     self.grid[x][y].is_wall = True
         
-        # Add some long wall segments to create corridors
-        for _ in range(15):
+        # Add FEWER long wall segments 
+        for _ in range(5):  # Reduced from 15 to 5
             if random.random() < 0.5:
                 # Horizontal wall
-                sx = random.randint(4, self.width - 10)
+                sx = random.randint(4, self.width - 15)
                 sy = random.randint(4, self.height - 4)
-                length = random.randint(5, 10)
+                length = random.randint(3, 5)  # Shorter walls
                 for i in range(length):
                     x = sx + i
                     if (3 < x < self.width - 3 and
-                        not self.grid[x][sy].is_start and not self.grid[x][sy].is_exit):
+                        not self.grid[x][sy].is_start and not self.grid[x][sy].is_exit and
+                        (x, sy) not in self.correct_path_cells):  # DON'T block winding path
                         self.grid[x][sy].is_wall = True
             else:
                 # Vertical wall
                 sx = random.randint(4, self.width - 4)
-                sy = random.randint(4, self.height - 10)
-                length = random.randint(5, 10)
+                sy = random.randint(4, self.height - 15)
+                length = random.randint(3, 5)  # Shorter walls
                 for i in range(length):
                     y = sy + i
                     if (3 < y < self.height - 3 and
-                        not self.grid[sx][y].is_start and not self.grid[sx][y].is_exit):
+                        not self.grid[sx][y].is_start and not self.grid[sx][y].is_exit and
+                        (sx, y) not in self.correct_path_cells):  # DON'T block winding path
                         self.grid[sx][y].is_wall = True
+        
+        # NO random walls - keep it open
+        # Agents need to be able to navigate!
     
     def _create_rooms(self):
         """Create some open rooms for variety"""
@@ -185,22 +363,46 @@ class Maze:
         """Create TRUE dead ends - single cells where if you step in, you CANNOT move (even back)"""
         # These are trap cells - once you're there, you're completely stuck
         # IMPORTANT: Never place dead ends on the correct solution path!
-        dead_end_positions = [
-            (5, 5), (8, 3), (12, 6), (18, 4), (22, 8),
-            (6, 12), (10, 15), (15, 18), (20, 14), (25, 20),
-            (7, 20), (14, 10), (19, 22), (11, 25), (24, 12),
-            (16, 8), (9, 18), (21, 16), (13, 23), (26, 6),
-            (17, 11), (23, 19), (8, 24), (19, 7)
-        ]
         
-        for dx, dy in dead_end_positions:
-            if dx >= self.width - 3 or dy >= self.height - 3:
-                continue
+        # Scale dead ends based on maze size
+        # 30x30 maze had 24 dead ends, 50x50 should have ~40-45
+        num_dead_ends = int((self.width * self.height) / 40)  # ~22 for 30x30, ~62 for 50x50
+        # Cap it at reasonable amount
+        num_dead_ends = min(num_dead_ends, 45)
+        
+        # Generate random positions for dead ends
+        dead_end_positions = []
+        attempts = 0
+        max_attempts = num_dead_ends * 10
+        
+        while len(dead_end_positions) < num_dead_ends and attempts < max_attempts:
+            attempts += 1
+            dx = random.randint(5, self.width - 6)
+            dy = random.randint(5, self.height - 6)
             
-            # CRITICAL: Skip if this cell is on the correct solution path
+            # Skip if on correct path
             if (dx, dy) in self.correct_path_cells:
                 continue
             
+            # Skip if too close to start or exit
+            if (abs(dx - self.start_pos[0]) < 5 and abs(dy - self.start_pos[1]) < 5):
+                continue
+            if (abs(dx - self.exit_pos[0]) < 5 and abs(dy - self.exit_pos[1]) < 5):
+                continue
+            
+            # Skip if already have dead end nearby
+            too_close = False
+            for ex, ey in dead_end_positions:
+                if abs(dx - ex) < 4 and abs(dy - ey) < 4:
+                    too_close = True
+                    break
+            if too_close:
+                continue
+            
+            dead_end_positions.append((dx, dy))
+        
+        # Create the dead ends
+        for dx, dy in dead_end_positions:
             # Make sure this cell is a path (not wall)
             if (2 < dx < self.width - 2 and 2 < dy < self.height - 2 and
                 not self.grid[dx][dy].is_start and not self.grid[dx][dy].is_exit):
@@ -229,10 +431,43 @@ class Maze:
         # These are NOT dead ends - agents can move around and escape
         # But they waste time because they don't lead anywhere useful
         # IMPORTANT: Avoid placing trap zones on the correct solution path!
-        trap_centers = [
-            (8, 8), (20, 10), (15, 20), (25, 15), (10, 25),
-            (18, 25), (12, 12), (22, 22), (5, 18), (27, 7)
-        ]
+        
+        # Scale trap zones based on maze size
+        # 30x30 had 10 traps, 50x50 should have ~15-18
+        num_traps = int((self.width * self.height) / 80)  # ~11 for 30x30, ~31 for 50x50
+        # Cap it at reasonable amount
+        num_traps = min(num_traps, 18)
+        
+        # Generate random trap centers
+        trap_centers = []
+        attempts = 0
+        max_attempts = num_traps * 10
+        
+        while len(trap_centers) < num_traps and attempts < max_attempts:
+            attempts += 1
+            tx = random.randint(5, self.width - 6)
+            ty = random.randint(5, self.height - 6)
+            
+            # Skip if on correct path
+            if (tx, ty) in self.correct_path_cells:
+                continue
+            
+            # Skip if too close to start or exit
+            if (abs(tx - self.start_pos[0]) < 6 and abs(ty - self.start_pos[1]) < 6):
+                continue
+            if (abs(tx - self.exit_pos[0]) < 6 and abs(ty - self.exit_pos[1]) < 6):
+                continue
+            
+            # Skip if already have trap nearby
+            too_close = False
+            for ex, ey in trap_centers:
+                if abs(tx - ex) < 6 and abs(ty - ey) < 6:
+                    too_close = True
+                    break
+            if too_close:
+                continue
+            
+            trap_centers.append((tx, ty))
         
         for tx, ty in trap_centers:
             if tx >= self.width - 4 or ty >= self.height - 4:
@@ -443,59 +678,131 @@ class Maze:
         return False
     
     def _create_guaranteed_path(self):
-        """Create a guaranteed winding path from start to exit"""
+        """Create a COMPLEX winding path from start to exit with MANY turns"""
         sx, sy = self.start_pos
         ex, ey = self.exit_pos
         
         x, y = sx, sy
         
-        # Create a winding path that avoids being too simple
-        # Go right in steps
-        while x < ex - 5:
-            for _ in range(3):
+        # Create a VERY winding path with multiple direction changes
+        # We'll use a snake-like pattern with random variations
+        
+        path_cells = [(x, y)]
+        direction = 'right'  # Start going right
+        
+        while (x, y) != (ex, ey):
+            moved = False
+            
+            # Try to move in current direction
+            if direction == 'right' and x < ex - 1:
+                # Move right for a random distance
+                steps = random.randint(3, 6)
+                for _ in range(steps):
+                    if x < ex:
+                        self.grid[x][y].is_wall = False
+                        self.grid[x][y].is_dead_end = False
+                        self.grid[x][y].is_trap = False
+                        path_cells.append((x, y))
+                        x += 1
+                        moved = True
+                # Change direction
+                direction = random.choice(['down', 'up']) if y != ey else 'down'
+                
+            elif direction == 'left' and x > sx + 2:
+                # Move left for a random distance
+                steps = random.randint(2, 4)
+                for _ in range(steps):
+                    if x > sx + 2:
+                        self.grid[x][y].is_wall = False
+                        self.grid[x][y].is_dead_end = False
+                        self.grid[x][y].is_trap = False
+                        path_cells.append((x, y))
+                        x -= 1
+                        moved = True
+                # Change direction
+                direction = random.choice(['down', 'right'])
+                
+            elif direction == 'down' and y < ey - 1:
+                # Move down for a random distance
+                steps = random.randint(3, 6)
+                for _ in range(steps):
+                    if y < ey:
+                        self.grid[x][y].is_wall = False
+                        self.grid[x][y].is_dead_end = False
+                        self.grid[x][y].is_trap = False
+                        path_cells.append((x, y))
+                        y += 1
+                        moved = True
+                # Change direction - sometimes go left to make it interesting
+                if x > ex and random.random() < 0.3:
+                    direction = 'left'
+                else:
+                    direction = random.choice(['right', 'left']) if x != ex else 'right'
+                    
+            elif direction == 'up' and y > sy + 2:
+                # Move up for a random distance
+                steps = random.randint(2, 4)
+                for _ in range(steps):
+                    if y > sy + 2:
+                        self.grid[x][y].is_wall = False
+                        self.grid[x][y].is_dead_end = False
+                        self.grid[x][y].is_trap = False
+                        path_cells.append((x, y))
+                        y -= 1
+                        moved = True
+                # Change direction
+                direction = random.choice(['right', 'down'])
+            
+            # If stuck, move directly toward goal
+            if not moved:
                 if x < ex:
                     self.grid[x][y].is_wall = False
                     self.grid[x][y].is_dead_end = False
                     self.grid[x][y].is_trap = False
+                    path_cells.append((x, y))
                     x += 1
-            # Go down a bit
-            if y < ey:
-                self.grid[x][y].is_wall = False
-                self.grid[x][y].is_dead_end = False
-                self.grid[x][y].is_trap = False
-                y += 1
-        
-        # Complete the path to exit
-        while x < ex:
-            self.grid[x][y].is_wall = False
-            self.grid[x][y].is_dead_end = False
-            self.grid[x][y].is_trap = False
-            x += 1
-        
-        while y < ey:
-            self.grid[x][y].is_wall = False
-            self.grid[x][y].is_dead_end = False
-            self.grid[x][y].is_trap = False
-            y += 1
+                    direction = 'right'
+                elif y < ey:
+                    self.grid[x][y].is_wall = False
+                    self.grid[x][y].is_dead_end = False
+                    self.grid[x][y].is_trap = False
+                    path_cells.append((x, y))
+                    y += 1
+                    direction = 'down'
+                elif x > ex:
+                    self.grid[x][y].is_wall = False
+                    self.grid[x][y].is_dead_end = False
+                    self.grid[x][y].is_trap = False
+                    path_cells.append((x, y))
+                    x -= 1
+                    direction = 'left'
+                elif y > ey:
+                    self.grid[x][y].is_wall = False
+                    self.grid[x][y].is_dead_end = False
+                    self.grid[x][y].is_trap = False
+                    path_cells.append((x, y))
+                    y -= 1
+                    direction = 'up'
+                else:
+                    break
         
         # Ensure exit is reachable
         self.grid[ex][ey].is_wall = False
         self.grid[ex][ey].is_dead_end = False
         self.grid[ex][ey].is_trap = False
+        path_cells.append((ex, ey))
         
-        # Clear a bit around the path for easier navigation
-        x, y = sx, sy
-        while x <= ex:
-            # Clear one cell above and below the path
-            if y > 1:
-                self.grid[x][y-1].is_wall = False
-                self.grid[x][y-1].is_dead_end = False
-            if y < self.height - 2:
-                self.grid[x][y+1].is_wall = False
-                self.grid[x][y+1].is_dead_end = False
-            x += 1
-            if y < ey:
-                y += 1
+        # Clear cells around the path to make corridors (but keep it narrow)
+        for px, py in path_cells:
+            # Only clear one random adjacent cell to keep it challenging
+            if random.random() < 0.4:
+                direction = random.choice([(0, 1), (1, 0), (0, -1), (-1, 0)])
+                dx, dy = direction
+                nx, ny = px + dx, py + dy
+                if 1 < nx < self.width - 2 and 1 < ny < self.height - 2:
+                    self.grid[nx][ny].is_wall = False
+                    self.grid[nx][ny].is_dead_end = False
+                    self.grid[nx][ny].is_trap = False
     
     def _ensure_path(self):
         """Use BFS to ensure a path exists, carving one if needed"""

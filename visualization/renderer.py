@@ -35,9 +35,9 @@ class Renderer:
         
         # Agent selection state
         self.selecting_agents = False
-        self.selected_agent_count = 5
+        self.selected_agent_count = 10  # Start with 10 agents
         self.min_agents = 1
-        self.max_agents = 20
+        self.max_agents = 50  # Increased from 20 to 50
         
         # Message visualization
         self.message_display_time = {}
@@ -78,35 +78,10 @@ class Renderer:
     
     def draw_agents(self):
         """Draw all agents"""
-        # First, draw the shared exit path if it exists (any agent has it)
-        exit_path = None
-        for agent in self.simulator.agents:
-            if agent.exit_path:
-                exit_path = agent.exit_path
-                break
+        # NOTE: Exit path visualization removed to keep maze exploration challenging
+        # Agents still share and follow the path internally, but it's not shown visually
         
-        # Draw the discovered exit path in bright green
-        if exit_path and len(exit_path) > 1:
-            for i in range(len(exit_path) - 1):
-                x1, y1 = exit_path[i]
-                x2, y2 = exit_path[i + 1]
-                
-                start_pos = (
-                    self.maze_offset_x + x1 * config.CELL_SIZE + config.CELL_SIZE // 2,
-                    y1 * config.CELL_SIZE + config.CELL_SIZE // 2
-                )
-                end_pos = (
-                    self.maze_offset_x + x2 * config.CELL_SIZE + config.CELL_SIZE // 2,
-                    y2 * config.CELL_SIZE + config.CELL_SIZE // 2
-                )
-                
-                # Draw thick bright green line for the exit path
-                pygame.draw.line(self.screen, (0, 255, 0), start_pos, end_pos, 3)
-                
-                # Draw dots along the path
-                pygame.draw.circle(self.screen, (0, 200, 0), start_pos, 3)
-        
-        # Now draw agents - show ALL agents, even stuck ones
+        # Draw agents - show ALL agents, even stuck ones
         for i, agent in enumerate(self.simulator.agents):
             # Show all agents: active, dead, or at exit
             color = config.AGENT_COLORS[i % len(config.AGENT_COLORS)]
