@@ -496,7 +496,22 @@ class Renderer:
         self.screen.blit(start_text, (start_button_rect.centerx - 25, start_button_rect.centery - 8))
         
         self.start_button = start_button_rect
-        y_offset += 50
+        y_offset += 40
+        
+        # Show keyboard hints when selecting agents
+        if self.selecting_agents:
+            hint_font = self.tiny_font
+            hints = [
+                "← → : Change agents",
+                "ENTER : Start",
+                "M : New maze"
+            ]
+            for hint in hints:
+                hint_text = hint_font.render(hint, True, (150, 200, 255))
+                self.screen.blit(hint_text, (20, y_offset))
+                y_offset += 16
+        
+        y_offset += 10
         
         # Simulation Controls
         pygame.draw.line(self.screen, (60, 60, 70), (10, y_offset), (self.sidebar_width - 10, y_offset))
@@ -507,6 +522,7 @@ class Renderer:
             ("↑/↓", "Speed"),
             ("S", "Step"),
             ("R", "Reset"),
+            ("M", "New Maze"),
             ("ESC", "Quit")
         ]
         
@@ -598,7 +614,7 @@ class Renderer:
                         print(f"Simulation {'PAUSED' if self.paused else 'RESUMED'}")
                 elif event.key == pygame.K_s:
                     # Step by step mode
-                    if self.paused:
+                    if self.paused and not self.selecting_agents:
                         self.step_by_step = True
                         print("Executing one step...")
                 elif event.key == pygame.K_r:
@@ -606,6 +622,31 @@ class Renderer:
                     self.selecting_agents = True
                     self.paused = True
                     print("Press ← → to select agents, ENTER to start")
+                elif event.key == pygame.K_m:
+                    # Regenerate maze - works ANYTIME (even during agent selection!)
+                    print("\n" + "="*50)
+                    print("GENERATING NEW MAZE...")
+                    print("="*50)
+                    self.regenerate_maze()
+                    print("New maze generated! Select agents to start.")
+                elif event.key == pygame.K_LEFT:
+                    # Decrease agent count during selection
+                    if self.selecting_agents:
+                        if self.selected_agent_count > self.min_agents:
+                            self.selected_agent_count -= 1
+                            print(f"Agents: {self.selected_agent_count}")
+                elif event.key == pygame.K_RIGHT:
+                    # Increase agent count during selection
+                    if self.selecting_agents:
+                        if self.selected_agent_count < self.max_agents:
+                            self.selected_agent_count += 1
+                            print(f"Agents: {self.selected_agent_count}")
+                elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                    # Start simulation with selected agents
+                    if self.selecting_agents:
+                        self.selecting_agents = False
+                        self.reset_simulation_with_agents(self.selected_agent_count)
+                        print(f"Starting simulation with {self.selected_agent_count} agents")
                 elif event.key == pygame.K_UP:
                     # Increase speed (only if not selecting agents)
                     if not self.selecting_agents:
@@ -639,6 +680,41 @@ class Renderer:
         
         print(f"Simulation reset with {num_agents} agents!")
     
+    def regenerate_maze(self):
+        """Regenerate the entire maze and reset simulation"""
+        from environment.maze import Maze
+        from simulation.simulator import Simulator
+        
+        # Generate a brand new maze
+        self.maze = Maze(
+            config.MAZE_WIDTH,
+            config.MAZE_HEIGHT,
+            config.WALL_DENSITY,
+            use_fixed_maze=False  # Always generate random maze on M key
+        )
+        self.maze.generate()
+        
+        print(f"New maze generated!")
+        print(f"Start: {self.maze.start_pos}, Exit: {self.maze.exit_pos}")
+        
+        # Create new simulator with default number of agents
+        self.simulator = Simulator(
+            self.maze,
+            config.NUM_AGENTS,
+            config.AGENT_ENERGY,
+            config.AGENT_VISION_RANGE,
+            config.COMMUNICATION_RANGE
+        )
+        
+        # Reset all visualization state
+        self.message_display_time = {}
+        self.active_communications = []
+        self.message_log = []
+        self.paused = True
+        self.selecting_agents = True  # Show agent selection screen
+        
+        print("Ready to start! Select number of agents.")
+    
     def run(self, max_steps=1000):
         """Run the visualization loop"""
         running = True
@@ -649,6 +725,7 @@ class Renderer:
         print("↑/↓: Increase/Decrease Speed")
         print("S: Single Step (when paused)")
         print("R: Reset Simulation")
+        print("M: New Maze (regenerate maze)")
         print("ESC: Quit")
         print("===========================\n")
         

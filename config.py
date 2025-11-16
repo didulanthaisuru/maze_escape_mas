@@ -1,8 +1,8 @@
 # config.py - Configuration for Multi-Agent Maze Escape Simulation
 
 # Maze Configuration
-MAZE_WIDTH = 50  # Scaled up for more complexity
-MAZE_HEIGHT = 50  # Scaled up for more complexity
+MAZE_WIDTH = 46  # Reduced by 4 (2 from each side) - was 50
+MAZE_HEIGHT = 46  # Reduced by 4 (2 from each side) - was 50
 WALL_DENSITY = 0.3  # Probability of a cell being a wall
 
 # Agent Configuration

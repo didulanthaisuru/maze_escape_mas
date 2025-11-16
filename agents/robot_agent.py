@@ -164,32 +164,8 @@ class RobotAgent:
                 blackboard.post_message(self.id, 'exit_found', {'position': current_pos})
             return None  # Stay at exit
         
-        # CHECK: Are we on a TRUE DEAD END cell? (Cannot move at all!)
-        if current_cell and current_cell.is_dead_end:
-            # We stepped on a dead end cell - we're DEAD! No escape, no rescue!
-            # This agent is finished - permanently stuck
-            if not self.reached_exit and not self.is_dead:
-                print(f"Agent {self.id} DIED in dead end at {current_pos}! RIP ☠️")
-                self.is_dead = True  # Mark as permanently dead
-                
-                # Broadcast that we died here - warn others!
-                communication_protocol.broadcast(
-                    self.id,
-                    'DEAD_END',
-                    {
-                        'position': current_pos,
-                        'agent_id': self.id,
-                        'is_trap': True,
-                        'message': f'Agent {self.id} DIED in dead end! AVOID THIS CELL!'
-                    }
-                )
-                blackboard.add_dead_end(current_pos, self.id)
-            
-            # Cannot move - permanently stuck (DEAD)
-            return None
-        
-        # PRIORITY 1: If exit found and we have the path, FOLLOW IT EXACTLY!
-        # STOP ALL OTHER EXPLORATION - evacuation is top priority!
+        # CRITICAL FIX: If exit path is known, NO AGENT CAN DIE - EVER!
+        # Even if on dead end, they MUST be able to escape using the shared path!
         if self.should_evacuate and self.exit_path:
             # Use BFS to find shortest path from current position to ANY point on the exit path
             # This is MUCH smarter than just moving towards closest point!
@@ -215,15 +191,13 @@ class RobotAgent:
                         if neighbor in visited:
                             continue
                         
-                        # Check if neighbor is safe (not wall, not dead end)
+                        # Check if neighbor is safe (not wall)
                         cell = maze.get_cell(neighbor[0], neighbor[1])
                         if not cell or cell.is_wall:
                             continue
                         
-                        # ONLY avoid dead ends if we know about them
-                        # Don't be too picky - we need to escape!
-                        if cell.is_dead_end:
-                            continue
+                        # During evacuation, we can go ANYWHERE (even dead ends) to reach the path!
+                        # This is rescue mode - survival is guaranteed if we reach the path!
                         
                         visited.add(neighbor)
                         queue.append((neighbor, path + [neighbor]))
@@ -266,6 +240,7 @@ class RobotAgent:
                     return None
             
             # Not on path yet - use BFS to find shortest route TO the path
+            print(f"Agent {self.id} at {current_pos} navigating TO exit path using BFS...")
             next_move = bfs_to_exit_path()
             if next_move:
                 return next_move
@@ -274,8 +249,7 @@ class RobotAgent:
             print(f"Agent {self.id} BFS failed! Using simple navigation...")
             closest_path_pos = min(self.exit_path, key=lambda p: abs(p[0] - self.x) + abs(p[1] - self.y))
             neighbors = maze.get_neighbors(self.x, self.y)
-            safe_neighbors = [n for n in neighbors if not maze.get_cell(n[0], n[1]).is_wall 
-                            and not maze.get_cell(n[0], n[1]).is_dead_end]
+            safe_neighbors = [n for n in neighbors if not maze.get_cell(n[0], n[1]).is_wall]
             
             if closest_path_pos in safe_neighbors:
                 return closest_path_pos
@@ -286,10 +260,37 @@ class RobotAgent:
                                               abs(n[1] - closest_path_pos[1]))
                 return best_neighbor
             
-            # No valid neighbors - stuck, return None
+            # ABSOLUTE LAST RESORT: Even if truly stuck, DON'T DIE!
+            # Stay put and wait for rescue or path to clear
+            print(f"Agent {self.id} has exit path but NO moves available! STAYING PUT - will NOT die!")
             return None
         
-        # PRIORITY 1B: If exit found but no path yet, navigate toward exit location
+        # CHECK: Are we on a TRUE DEAD END cell? (Cannot move at all!)
+        # BUT ONLY DIE if exit path is NOT known yet!
+        if current_cell and current_cell.is_dead_end:
+            # We stepped on a dead end cell - we're DEAD! No escape, no rescue!
+            # This agent is finished - permanently stuck
+            if not self.reached_exit and not self.is_dead:
+                print(f"Agent {self.id} DIED in dead end at {current_pos}! RIP ☠️")
+                self.is_dead = True  # Mark as permanently dead
+                
+                # Broadcast that we died here - warn others!
+                communication_protocol.broadcast(
+                    self.id,
+                    'DEAD_END',
+                    {
+                        'position': current_pos,
+                        'agent_id': self.id,
+                        'is_trap': True,
+                        'message': f'Agent {self.id} DIED in dead end! AVOID THIS CELL!'
+                    }
+                )
+                blackboard.add_dead_end(current_pos, self.id)
+            
+            # Cannot move - permanently stuck (DEAD)
+            return None
+        
+        # PRIORITY 2: If exit found but no path yet, navigate toward exit location
         if self.should_evacuate and self.exit_location:
             neighbors = maze.get_neighbors(self.x, self.y)
             

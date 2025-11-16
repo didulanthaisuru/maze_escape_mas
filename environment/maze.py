@@ -73,6 +73,9 @@ class Maze:
         self.grid[self.start_pos[0]][self.start_pos[1]].is_start = True
         self.grid[self.exit_pos[0]][self.exit_pos[1]].is_wall = False
         self.grid[self.exit_pos[0]][self.exit_pos[1]].is_exit = True
+        
+        # IMPORTANT: Analyze and mark all actual dead ends in addition to manually created ones
+        self._identify_all_dead_ends()
     
     def _carve_maze_passages(self):
         """Carve passages through the walls to create a DENSE maze with narrow corridors"""
@@ -650,6 +653,44 @@ class Maze:
         for y in range(self.height):
             self.grid[0][y].is_wall = True
             self.grid[self.width - 1][y].is_wall = True
+        
+        # IMPORTANT: Analyze and mark all actual dead ends
+        self._identify_all_dead_ends()
+    
+    def _identify_all_dead_ends(self):
+        """
+        Analyze the entire maze and mark ALL cells that are actual dead ends.
+        A dead end is a cell with only ONE non-wall neighbor (no way out except back).
+        """
+        dead_end_count = 0
+        
+        for x in range(1, self.width - 1):
+            for y in range(1, self.height - 1):
+                cell = self.grid[x][y]
+                
+                # Skip walls, start, and exit
+                if cell.is_wall or cell.is_start or cell.is_exit:
+                    continue
+                
+                # Count non-wall neighbors
+                neighbors = []
+                for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                    nx, ny = x + dx, y + dy
+                    if (0 <= nx < self.width and 0 <= ny < self.height and
+                        not self.grid[nx][ny].is_wall):
+                        neighbors.append((nx, ny))
+                
+                # If only 1 neighbor, this is a dead end!
+                if len(neighbors) == 1:
+                    cell.is_dead_end = True
+                    cell.is_trap = True  # Dead ends are traps
+                    dead_end_count += 1
+                else:
+                    # Make sure it's not marked as dead end
+                    cell.is_dead_end = False
+                    cell.is_trap = False
+        
+        print(f"Identified {dead_end_count} dead ends in the maze")
     
     
     def _path_exists(self):

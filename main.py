@@ -43,6 +43,7 @@ def run_visualization_mode(args):
     print("Controls:")
     print("  ESC or Close Window: Exit")
     print("  R: Reset and select agents again")
+    print("  M: New Maze (regenerate maze)")
     print("  SPACE: Pause/Unpause\n")
     
     # Run renderer
