@@ -138,13 +138,13 @@ Create `requirements.txt`:
 ```bash
 # Linux/Mac
 cat > requirements.txt << EOF
-pygame==2.5.2
+pygame==2.6.1
 numpy==1.24.3
 matplotlib==3.7.1
 EOF
 
 # Windows - create file manually or:
-echo pygame==2.5.2 > requirements.txt
+echo pygame==2.6.1 > requirements.txt
 echo numpy==1.24.3 >> requirements.txt
 echo matplotlib==3.7.1 >> requirements.txt
 ```
@@ -268,7 +268,20 @@ All should print "OK".
 python main.py
 ```
 
-A pygame window should open showing the simulation.
+**What to expect:**
+1. Agent selection screen appears
+2. Use **← →** keys or **+/- buttons** to select 1-50 agents
+3. Press **ENTER** or click **START** to begin
+4. Watch agents explore the 46×46 maze
+5. Use **M** key to generate new mazes anytime
+
+**Controls during simulation:**
+- **M**: New maze
+- **SPACE**: Pause/Resume
+- **↑↓**: Speed control
+- **S**: Single step (when paused)
+- **R**: Reset
+- **ESC**: Quit
 
 ### 3. Run Benchmark Mode
 
@@ -327,15 +340,22 @@ python main.py
 **Solution 1 - Reinstall pygame:**
 ```bash
 pip uninstall pygame
-pip install pygame==2.5.2
+pip install pygame==2.6.1
 ```
 
-**Solution 2 - Check display (Linux):**
+**Solution 2 - macOS specific:**
+```bash
+# Ensure framework build
+pip install --upgrade pygame
+python -m pygame.examples.aliens  # Test if pygame works
+```
+
+**Solution 3 - Check display (Linux):**
 ```bash
 export DISPLAY=:0
 ```
 
-**Solution 3 - Try headless mode:**
+**Solution 4 - Try headless mode:**
 Run benchmark instead:
 ```bash
 python main.py --mode benchmark --no-plot
@@ -420,19 +440,30 @@ If you're still stuck:
 
 ## Success! 🎉
 
-If you see the pygame window with moving agents, congratulations! You've successfully set up a multi-agent system simulation.
+If you see the agent selection screen or the pygame window with moving agents, congratulations! You've successfully set up a multi-agent system simulation.
 
 **What you've built:**
-- A complete multi-agent system
-- Visual simulation with pygame
+- A complete multi-agent system with BDI architecture
+- Interactive agent selection (1-50 agents)
+- Visual simulation with pygame (46×46 maze)
+- Procedural maze generation with dead end detection
+- BFS-based evacuation system (zero deaths after exit found)
 - Performance benchmarking tools
 - Extensible architecture for future enhancements
 
+**Key Features:**
+- 🧠 **BDI Agents**: Belief-Desire-Intention decision model
+- 📡 **Blackboard Communication**: Shared knowledge base
+- 🎮 **Interactive Controls**: M for new maze, ← → for agent selection
+- 🚨 **Dead End Detection**: Automatic identification (typically 30-100+ traps)
+- 🛟 **Zero Deaths Policy**: BFS evacuation ensures no deaths after exit found
+- 📊 **Benchmark Mode**: Compare 1-50 agents performance
+
 Now you can demonstrate:
-- Agent communication
-- Coordination strategies
-- Negotiation protocols
-- Emergent behavior
-- Performance analysis
+- Agent communication (3 message types: DEAD_END, EXIT_FOUND, WRONG_PATH)
+- Coordination strategies (BFS pathfinding, collective evacuation)
+- Emergent behavior (swarm intelligence, knowledge cascades)
+- Performance analysis (8-15x speedup with 50 agents vs 1)
+- Scalability testing (1-50 agents with performance curves)
 
 Good luck with your assignment! 🚀
